@@ -3,11 +3,12 @@ let bodyPose;
 let poses = [];
 
 // --- LAYOUT & UI VARIABLES ---
-let TOPBAR_H = 300; // 👇 Increased height to fit 2 rows of data
+let TOPBAR_H = 160; 
 let ACTIVE_W; 
 let ACTIVE_H; 
 let fontRegular; 
-let vidDrawX = 0, vidDrawY = 0, vidDrawW = 0, vidDrawH = 0; // For camera aspect ratio
+// 👇 NEW: Variables to store the perfectly scaled camera size
+let vidDrawX = 0, vidDrawY = 0, vidDrawW = 0, vidDrawH = 0; 
 
 // --- DATA VARIABLES ---
 let table;
@@ -36,7 +37,8 @@ function setup() {
   ACTIVE_H = height - TOPBAR_H; 
 
   video = createCapture(VIDEO);
-  video.hide(); // Don't force a size here, let it load at its natural aspect ratio
+  // 👇 CHANGED: Removed the forced video.size() so the camera loads at its natural, un-stretched aspect ratio
+  video.hide();
 
   bodyPose = ml5.bodyPose(video, () => {
     console.log("bodyPose (MoveNet) Ready");
@@ -80,7 +82,7 @@ function parseCSV() {
 }
 
 function draw() {
-  // 1. DYNAMIC CAMERA CROPPING ("Object-Fit: Cover" Math)
+  // 👇 NEW: Calculate the math to scale the video proportionally without stretching it
   if (video.width > 0 && video.height > 0) {
     let videoAspect = video.width / video.height;
     let canvasAspect = ACTIVE_W / ACTIVE_H;
@@ -89,21 +91,22 @@ function draw() {
       vidDrawW = ACTIVE_W;
       vidDrawH = ACTIVE_W / videoAspect;
       vidDrawX = 0;
-      vidDrawY = (ACTIVE_H - vidDrawH) / 2; // Crop top/bottom
+      vidDrawY = (ACTIVE_H - vidDrawH) / 2; // Crop the top and bottom
     } else {
       vidDrawH = ACTIVE_H;
       vidDrawW = ACTIVE_H * videoAspect;
-      vidDrawX = (ACTIVE_W - vidDrawW) / 2; // Crop left/right
+      vidDrawX = (ACTIVE_W - vidDrawW) / 2; // Crop the left and right sides
       vidDrawY = 0;
     }
   }
 
-  // 2. Draw Live Video Background
+  // 1. Draw Live Video Background
   push();
   translate(0, TOPBAR_H); 
   translate(ACTIVE_W, 0); 
   scale(-1, 1); 
   
+  // 👇 CHANGED: Draw the video using the new proportionally scaled variables
   if (vidDrawW > 0) {
     image(video, vidDrawX, vidDrawY, vidDrawW, vidDrawH); 
   }
@@ -112,7 +115,7 @@ function draw() {
   rect(0, 0, ACTIVE_W, ACTIVE_H);
   pop();
 
-  // 3. AUTO REFRESH SYSTEM 
+  // 2. AUTO REFRESH SYSTEM 
   if (millis() - lastClearTime > CLEAR_INTERVAL) {
     treeClusters = []; 
     completedTrees = [];
@@ -122,10 +125,10 @@ function draw() {
     console.log("Canvas Auto-Cleared!");
   }
 
-  // 4. TRACKING & STATIONARY LOGIC
+  // 3. TRACKING & STATIONARY LOGIC
   updateTrackedPeople();
 
-  // 5. DRAW TREE CLUSTERS
+  // 4. DRAW TREE CLUSTERS
   for (let i = treeClusters.length - 1; i >= 0; i--) {
     let cluster = treeClusters[i];
     cluster.update();
@@ -135,15 +138,14 @@ function draw() {
       completedTrees.unshift(cluster.data); 
       cluster.logged = true;
       
-      // 👇 CHANGED: Increased to 10 trees to fill two rows!
-      if (completedTrees.length > 10) completedTrees.pop(); 
+      if (completedTrees.length > 5) completedTrees.pop(); 
     }
   }
 
-  // 6. DRAW TOP UI
+  // 5. DRAW TOP UI
   drawTopBar(); 
 
-  // 7. DRAW REGISTRATION MARKS
+  // 6. DRAW REGISTRATION MARKS
   drawRegistrationMarks();
 }
 
@@ -151,6 +153,7 @@ function updateTrackedPeople() {
   let currentTime = millis();
   let currentPoses = [];
   
+  // Safe fallback if video isn't fully loaded yet
   let vW = video.width || 640;
   let vH = video.height || 480;
 
@@ -160,8 +163,8 @@ function updateTrackedPeople() {
     let minY = Infinity, maxY = -Infinity;
 
     for (let kp of pose.keypoints) {
-      if (kp.confidence > 0.1) {
-        // 👇 CHANGED: Map AI coordinates to match the cropped camera view
+      if (kp.confidence > 0.1) { // Note: You can lower this to 0.08 if it's struggling to detect people!
+        // 👇 CHANGED: Map the AI coordinates so they match the newly cropped camera feed
         let mappedX = map(kp.x, 0, vW, vidDrawX, vidDrawX + vidDrawW);
         let mappedY = map(kp.y, 0, vH, vidDrawY, vidDrawY + vidDrawH);
 
@@ -173,7 +176,7 @@ function updateTrackedPeople() {
       }
     }
 
-    if (validPoints > 5) {
+    if (validPoints > 5) { // Note: You can lower this to 3 if you want it to be more sensitive!
       let centerX = ACTIVE_W - ((minX + maxX) / 2); 
       let centerY = ((minY + maxY) / 2) + TOPBAR_H; 
       currentPoses.push(createVector(centerX, centerY));
@@ -238,65 +241,53 @@ function drawTopBar() {
   strokeWeight(4);
   line(0, TOPBAR_H, width, TOPBAR_H);
 
-  // Title Section (Shifted down slightly to center it in the taller bar)
   fill("#0b2f33");
   noStroke();
   textSize(32);
   textStyle(BOLD);
   textAlign(LEFT, TOP);
-  text("NEW ATLANTA FOREST", 40, 110);
+  text("NEW ATLANTA FOREST", 40, 50);
   
   stroke("#e3b43c");
   strokeWeight(2);
-  line(40, 155, 410, 155); 
+  line(40, 95, 410, 95); 
   
   stroke(200); 
   line(450, 30, 450, TOPBAR_H - 30);
 
-  // 👇 CHANGED: Grid System for Data Logs (2 Rows, 5 Columns)
   noStroke();
   let startX = 490; 
   let spacingX = 500; 
-  let startY = 30; // Start height for the first row
-  let spacingY = 140; // Drop down 140px for the second row
 
   for (let i = 0; i < completedTrees.length; i++) {
     let t = completedTrees[i];
+    let currentX = startX + (i * spacingX);
     
-    // Math to wrap the columns into two rows
-    let col = i % 5; 
-    let row = floor(i / 5); 
-    
-    let currentX = startX + (col * spacingX);
-    let currentY = startY + (row * spacingY);
-    
-    // Draw ID Number Badge
     let dotColor = (t.status === "Alive") ? color(paletteAlive[0]) : color(paletteDead[0]);
     fill(dotColor);
-    circle(currentX + 20, currentY + 20, 35); 
+    circle(currentX + 20, 50, 35); 
 
     fill(255); 
     textAlign(CENTER, CENTER);
     textSize(18);
     textStyle(BOLD);
-    text(t.id, currentX + 20, currentY + 22); 
+    text(t.id, currentX + 20, 52); 
 
-    // Text details vertically stacked next to the badge
     textAlign(LEFT, BASELINE);
     fill(40);
     textStyle(BOLD);
     textSize(20);
-    text(`Species: ${t.species}`, currentX + 50, currentY + 15);
+    text(`Species: ${t.species}`, currentX + 50, 45);
     
     textStyle(NORMAL);
     textSize(15);
     fill(100);
-    text(`Status: ${t.status}  |  Planted: ${t.year}`, currentX + 50, currentY + 40);
-    text(`City: ${t.city}  |  County: ${t.county}`, currentX + 50, currentY + 60);
+    text(`Status: ${t.status}  |  Planted: ${t.year}`, currentX + 50, 70);
+    text(`City: ${t.city}  |  County: ${t.county}`, currentX + 50, 90);
     
     fill("#8a7558"); 
     textSize(16);
-    text(`Distance: ${t.distance}m away`, currentX + 50, currentY + 85);
+    text(`Distance: ${t.distance}m away`, currentX + 50, 115);
   }
   pop();
 }
@@ -365,7 +356,7 @@ class TreeCluster {
     noStroke();
     fill(235, 233, 226, 230); 
     let bgSize = this.data.life * 2; 
-    circle(this.x, this.y, bgSize);
+    //circle(this.x, this.y, bgSize);
 
     for (let b of this.branches) {
       b.draw();
