@@ -3,23 +3,26 @@ let bodyPose;
 let poses = [];
 
 // --- LAYOUT & UI VARIABLES ---
-let SIDEBAR_W = 600;
-let ACTIVE_W; // Will be calculated in setup
+let TOPBAR_H = 300; // 👇 Increased height to fit 2 rows of data
+let ACTIVE_W; 
+let ACTIVE_H; 
 let fontRegular; 
+let vidDrawX = 0, vidDrawY = 0, vidDrawW = 0, vidDrawH = 0; // For camera aspect ratio
 
 // --- DATA VARIABLES ---
 let table;
-let treeDataList = []; // Parsed CSV data
-let completedTrees = []; // Data to display in the sidebar
+let treeDataList = []; 
+let completedTrees = []; 
 
 // --- SYSTEM VARIABLES ---
 let paletteAlive = ["#e3b43c", "#cbb691", "#8a7558"];
 let paletteDead = ["#111111", "#120202", "#2c2c2c"];
 let userImg;
-let treeClusters = []; // Holds all active growing seeds
-let trackedPeople = []; // Tracks people's stillness
+let treeClusters = []; 
+let trackedPeople = []; 
 let lastClearTime = 0;
 let CLEAR_INTERVAL = 120000; // 120 seconds
+let globalTreeID = 1; 
 
 function preload() {
   table = loadTable('Tree data - trees_atlanta_final (1).csv', 'csv', 'header');
@@ -27,13 +30,13 @@ function preload() {
 }
 
 function setup() {
-  // Lock the canvas to the exact physical resolution of your billboard
   createCanvas(3072, 1280);
-  ACTIVE_W = width - SIDEBAR_W;
+  
+  ACTIVE_W = width;
+  ACTIVE_H = height - TOPBAR_H; 
 
   video = createCapture(VIDEO);
-  video.size(ACTIVE_W, height); // Camera maps exactly to the active drawing area
-  video.hide();
+  video.hide(); // Don't force a size here, let it load at its natural aspect ratio
 
   bodyPose = ml5.bodyPose(video, () => {
     console.log("bodyPose (MoveNet) Ready");
@@ -45,7 +48,6 @@ function setup() {
   parseCSV();
 }
 
-// Extract CSV data into a usable array of objects
 function parseCSV() {
   let dates = table.getColumn('PlantedDate').map(Number);
   let minDate = min(dates);
@@ -55,17 +57,13 @@ function parseCSV() {
     let row = table.getRow(i);
     let rawDate = row.getNum('PlantedDate');
     
-    // Convert timestamp
     let yearPlanted = "Unknown";
     if (!isNaN(rawDate)) {
       yearPlanted = new Date(rawDate).getFullYear();
     }
 
-    // Grab Latitude and Longitude from the CSV
     let treeLat = row.getNum('Latitude');
     let treeLon = row.getNum('Longitude');
-    
-    // Calculate the distance from the viewer in meters
     let distanceMeters = calculateDistance(VIEWER_LAT, VIEWER_LON, treeLat, treeLon);
 
     treeDataList.push({
@@ -76,68 +74,86 @@ function parseCSV() {
       thickness: map(rawDate, minDate, maxDate, 30, 10),
       city: row.get('City') || "Unknown",
       county: row.get('County') || "Unknown",
-      // Save the calculated distance
       distance: floor(distanceMeters) 
     });
   }
 }
 
 function draw() {
-  // 1. Draw Live Video Background (Active Area)
+  // 1. DYNAMIC CAMERA CROPPING ("Object-Fit: Cover" Math)
+  if (video.width > 0 && video.height > 0) {
+    let videoAspect = video.width / video.height;
+    let canvasAspect = ACTIVE_W / ACTIVE_H;
+
+    if (canvasAspect > videoAspect) {
+      vidDrawW = ACTIVE_W;
+      vidDrawH = ACTIVE_W / videoAspect;
+      vidDrawX = 0;
+      vidDrawY = (ACTIVE_H - vidDrawH) / 2; // Crop top/bottom
+    } else {
+      vidDrawH = ACTIVE_H;
+      vidDrawW = ACTIVE_H * videoAspect;
+      vidDrawX = (ACTIVE_W - vidDrawW) / 2; // Crop left/right
+      vidDrawY = 0;
+    }
+  }
+
+  // 2. Draw Live Video Background
   push();
-  translate(SIDEBAR_W, 0); // Shift past the sidebar
-  translate(ACTIVE_W, 0); // Move to the right edge for mirroring
-  scale(-1, 1); // Flip horizontally for the mirror effect
+  translate(0, TOPBAR_H); 
+  translate(ACTIVE_W, 0); 
+  scale(-1, 1); 
   
-  // Draw the camera feed filling the entire active area
-  image(video, 0, 0, ACTIVE_W, height); 
+  if (vidDrawW > 0) {
+    image(video, vidDrawX, vidDrawY, vidDrawW, vidDrawH); 
+  }
   
-  // Very slight dark tint over the video so the white circles and trees pop out more
   fill(0, 0, 0, 60); 
-  rect(0, 0, ACTIVE_W, height);
+  rect(0, 0, ACTIVE_W, ACTIVE_H);
   pop();
 
-  // 2. AUTO REFRESH SYSTEM 
+  // 3. AUTO REFRESH SYSTEM 
   if (millis() - lastClearTime > CLEAR_INTERVAL) {
     treeClusters = []; 
     completedTrees = [];
     trackedPeople = [];
+    globalTreeID = 1; 
     lastClearTime = millis();
     console.log("Canvas Auto-Cleared!");
   }
 
-  // 3. TRACKING & STATIONARY LOGIC
+  // 4. TRACKING & STATIONARY LOGIC
   updateTrackedPeople();
 
-  // 4. DRAW TREE CLUSTERS (Seeds + Backgrounds + Roots)
+  // 5. DRAW TREE CLUSTERS
   for (let i = treeClusters.length - 1; i >= 0; i--) {
     let cluster = treeClusters[i];
     cluster.update();
     cluster.draw();
     
-    // Log its data to the sidebar IMMEDIATELY
     if (!cluster.logged) {
-      completedTrees.unshift(cluster.data); // Add to top of the list
+      completedTrees.unshift(cluster.data); 
       cluster.logged = true;
       
-      // Keep the list from overflowing the screen
-      if (completedTrees.length > 15) completedTrees.pop(); 
+      // 👇 CHANGED: Increased to 10 trees to fill two rows!
+      if (completedTrees.length > 10) completedTrees.pop(); 
     }
   }
 
-  // 5. DRAW SIDEBAR UI
-  drawSidebar();
+  // 6. DRAW TOP UI
+  drawTopBar(); 
 
-  // 6. DRAW REGISTRATION MARKS
+  // 7. DRAW REGISTRATION MARKS
   drawRegistrationMarks();
 }
 
-// --- Tracking People & Detecting Stillness ---
 function updateTrackedPeople() {
   let currentTime = millis();
-
-  // Map incoming poses to our active area
   let currentPoses = [];
+  
+  let vW = video.width || 640;
+  let vH = video.height || 480;
+
   for (let pose of poses) {
     let validPoints = 0;
     let minX = Infinity, maxX = -Infinity;
@@ -145,47 +161,44 @@ function updateTrackedPeople() {
 
     for (let kp of pose.keypoints) {
       if (kp.confidence > 0.1) {
-        minX = min(minX, kp.x);
-        maxX = max(maxX, kp.x);
-        minY = min(minY, kp.y);
-        maxY = max(maxY, kp.y);
+        // 👇 CHANGED: Map AI coordinates to match the cropped camera view
+        let mappedX = map(kp.x, 0, vW, vidDrawX, vidDrawX + vidDrawW);
+        let mappedY = map(kp.y, 0, vH, vidDrawY, vidDrawY + vidDrawH);
+
+        minX = min(minX, mappedX);
+        maxX = max(maxX, mappedX);
+        minY = min(minY, mappedY);
+        maxY = max(maxY, mappedY);
         validPoints++;
       }
     }
 
     if (validPoints > 5) {
-      // Mirror the X coordinate and shift it past the SIDEBAR_W
-      let centerX = ACTIVE_W - ((minX + maxX) / 2) + SIDEBAR_W;
-      let centerY = (minY + maxY) / 2;
+      let centerX = ACTIVE_W - ((minX + maxX) / 2); 
+      let centerY = ((minY + maxY) / 2) + TOPBAR_H; 
       currentPoses.push(createVector(centerX, centerY));
     }
   }
 
-  // Match current poses to our memory of tracked people
   for (let p of currentPoses) {
     let matched = false;
     for (let person of trackedPeople) {
       let d = dist(p.x, p.y, person.x, person.y);
       
-      if (d < 250) { // Same person bounding area
+      if (d < 250) { 
         matched = true;
-        
-        // If they moved less than 100 pixels, they are standing still
         if (d < 100) {
           if (person.stopTime === 0) person.stopTime = currentTime;
           
-          // Have they been still for 1 second?
           if (!person.hasPlanted && currentTime - person.stopTime > 1000) {
             plantSeed(person.x, person.y);
             person.hasPlanted = true;
           }
         } else {
-          // They moved! Reset stationary timer
           person.stopTime = 0;
           person.hasPlanted = false; 
         }
 
-        // Smooth update
         person.x = lerp(person.x, p.x, 0.5);
         person.y = lerp(person.y, p.y, 0.5);
         person.lastSeen = currentTime;
@@ -193,18 +206,11 @@ function updateTrackedPeople() {
       }
     }
 
-    // New person entered
     if (!matched) {
-      trackedPeople.push({
-        x: p.x, y: p.y,
-        stopTime: 0,
-        lastSeen: currentTime,
-        hasPlanted: false
-      });
+      trackedPeople.push({ x: p.x, y: p.y, stopTime: 0, lastSeen: currentTime, hasPlanted: false });
     }
   }
 
-  // Remove people who left the screen
   for (let i = trackedPeople.length - 1; i >= 0; i--) {
     if (currentTime - trackedPeople[i].lastSeen > 2000) {
       trackedPeople.splice(i, 1);
@@ -212,97 +218,105 @@ function updateTrackedPeople() {
   }
 }
 
-// --- Plant a Seed ---
 function plantSeed(personX, personY) {
-  // Grab a random tree from the dataset
   let randomData = random(treeDataList);
+  let uniqueTreeData = Object.assign({}, randomData);
   
-  // Plant 1 meter (~300 pixels) to the right. 
-  // Ensure it doesn't go off the right edge of the screen.
-  let seedX = min(personX + 300, width - 200); 
+  let seedX = personX; 
   let seedY = personY;
 
-  treeClusters.push(new TreeCluster(seedX, seedY, randomData));
+  treeClusters.push(new TreeCluster(seedX, seedY, uniqueTreeData));
 }
 
-// --- UI Rendering ---
-function drawSidebar() {
+function drawTopBar() {
   push();
-  fill(255); // White background
+  fill(255); 
   noStroke();
-  rect(0, 0, SIDEBAR_W, height);
+  rect(0, 0, width, TOPBAR_H); 
   
-  // Right border for the sidebar
   stroke("#0b2f33");
   strokeWeight(4);
-  line(SIDEBAR_W, 0, SIDEBAR_W, height);
+  line(0, TOPBAR_H, width, TOPBAR_H);
 
-  // Title
+  // Title Section (Shifted down slightly to center it in the taller bar)
   fill("#0b2f33");
   noStroke();
   textSize(32);
   textStyle(BOLD);
   textAlign(LEFT, TOP);
-  text("NEW ATLANTA FOREST", 40, 50);
+  text("NEW ATLANTA FOREST", 40, 110);
   
   stroke("#e3b43c");
   strokeWeight(2);
-  line(40, 95, SIDEBAR_W - 40, 95);
+  line(40, 155, 410, 155); 
+  
+  stroke(200); 
+  line(450, 30, 450, TOPBAR_H - 30);
 
-  // Draw Data Logs
+  // 👇 CHANGED: Grid System for Data Logs (2 Rows, 5 Columns)
   noStroke();
-  textSize(20);
-  let startY = 130;
-  let spacing = 110; 
+  let startX = 490; 
+  let spacingX = 500; 
+  let startY = 30; // Start height for the first row
+  let spacingY = 140; // Drop down 140px for the second row
 
   for (let i = 0; i < completedTrees.length; i++) {
     let t = completedTrees[i];
     
-    // Status Indicator Dot
+    // Math to wrap the columns into two rows
+    let col = i % 5; 
+    let row = floor(i / 5); 
+    
+    let currentX = startX + (col * spacingX);
+    let currentY = startY + (row * spacingY);
+    
+    // Draw ID Number Badge
     let dotColor = (t.status === "Alive") ? color(paletteAlive[0]) : color(paletteDead[0]);
     fill(dotColor);
-    circle(50, startY + (i * spacing) + 10, 15);
+    circle(currentX + 20, currentY + 20, 35); 
 
-    // Text details
+    fill(255); 
+    textAlign(CENTER, CENTER);
+    textSize(18);
+    textStyle(BOLD);
+    text(t.id, currentX + 20, currentY + 22); 
+
+    // Text details vertically stacked next to the badge
+    textAlign(LEFT, BASELINE);
     fill(40);
     textStyle(BOLD);
-    text(`Species: ${t.species}`, 75, startY + (i * spacing));
-    textStyle(NORMAL);
-    textSize(16);
-    fill(100);
-    text(`Status: ${t.status}  |  Planted: ${t.year}`, 75, startY + (i * spacing) + 25);
-    text(`City: ${t.city}  |  County: ${t.county}`, 75, startY + (i * spacing) + 45);
-    
-    // Display the distance
-    fill("#8a7558"); 
     textSize(20);
-    text(`Your tree is ${t.distance} meters away from you.`, 75, startY + (i * spacing) + 65);
+    text(`Species: ${t.species}`, currentX + 50, currentY + 15);
     
+    textStyle(NORMAL);
+    textSize(15);
+    fill(100);
+    text(`Status: ${t.status}  |  Planted: ${t.year}`, currentX + 50, currentY + 40);
+    text(`City: ${t.city}  |  County: ${t.county}`, currentX + 50, currentY + 60);
+    
+    fill("#8a7558"); 
+    textSize(16);
+    text(`Distance: ${t.distance}m away`, currentX + 50, currentY + 85);
   }
   pop();
 }
 
-// Viewer's static location (Converted from 33°46'27.5"N 84°23'43.5"W)
 const VIEWER_LAT = 33.774306;
 const VIEWER_LON = -84.395417;
 
-// The Haversine Formula to calculate distance in meters between two coordinates
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3; // Earth's radius in meters
+  const R = 6371e3; 
   const p1 = lat1 * Math.PI / 180;
   const p2 = lat2 * Math.PI / 180;
   const dp = (lat2 - lat1) * Math.PI / 180;
   const dl = (lon2 - lon1) * Math.PI / 180;
 
-  const a = Math.sin(dp / 2) * Math.sin(dp / 2) +
-            Math.cos(p1) * Math.cos(p2) *
-            Math.sin(dl / 2) * Math.sin(dl / 2);
+  const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return R * c; // Distance in meters
+  return R * c; 
 }
 
-// --- Tree Cluster Class (One Seed = One Dataset Entry) ---
 class TreeCluster {
   constructor(x, y, data) {
     this.x = x;
@@ -312,23 +326,18 @@ class TreeCluster {
     this.isFullyGrown = false;
     this.logged = false;
 
-    // Pick base color based on dataset status
+    this.id = globalTreeID++; 
+    this.data.id = this.id; 
+
     let basePalette = (this.data.status === "Alive") ? paletteAlive : paletteDead;
 
-    // Spawn radial trunks using THIS tree's data length
     let numTrunks = floor(random(8, 15));
     for (let i = 0; i < numTrunks; i++) {
       let angle = random(TWO_PI);
       let col = color(random(basePalette));
       
       this.branches.push(new Branch(
-        createVector(this.x, this.y), 
-        angle, 
-        this.data.thickness, 
-        0, 
-        this.data.life, 
-        col,
-        basePalette 
+        createVector(this.x, this.y), angle, this.data.thickness, 0, this.data.life, col, basePalette 
       ));
     }
   }
@@ -340,7 +349,7 @@ class TreeCluster {
     for (let i = this.branches.length - 1; i >= 0; i--) {
       let b = this.branches[i];
       if (!b.dead) {
-        b.step(this.branches); // Pass array so it can spawn splinters
+        b.step(this.branches); 
         allDead = false;
       }
     }
@@ -353,18 +362,15 @@ class TreeCluster {
   draw() {
     push();
     
-    // 1. Draw Localized Background Circle
     noStroke();
     fill(235, 233, 226, 230); 
     let bgSize = this.data.life * 2; 
     circle(this.x, this.y, bgSize);
 
-    // 2. Draw the Growing Roots
     for (let b of this.branches) {
       b.draw();
     }
 
-    // 3. Draw the Seed Image in the center
     imageMode(CENTER);
     if (userImg) {
       image(userImg, this.x, this.y, 60, 60);
@@ -372,11 +378,21 @@ class TreeCluster {
       fill("#e3b43c");
       circle(this.x, this.y, 60);
     }
+
+    noStroke(); 
+    fill(0); 
+    circle(this.x, this.y - 50, 40); 
+    
+    fill(255); 
+    textAlign(CENTER, CENTER);
+    textSize(20);
+    textStyle(BOLD);
+    text(this.id, this.x, this.y - 48); 
+    
     pop();
   }
 }
 
-// --- Branch Class ---
 class Branch {
   constructor(pos, angle, thickness, gen, life, col, palette) {
     this.pos = pos.copy();
@@ -407,7 +423,6 @@ class Branch {
 
     if (this.age > this.life || this.thickness < 1.0) this.dead = true;
 
-    // Splintering logic 
     if (random() < 0.008 && this.gen < 4 && branchArray.length < 500) {
       branchArray.push(new Branch(
         this.pos.copy(),
@@ -425,7 +440,6 @@ class Branch {
     noFill();
     stroke(this.col);
     
-    // Draw using line segments so the thickness properly tapers
     for (let i = 1; i < this.history.length; i++) {
       strokeWeight(this.history[i].thick);
       line(
@@ -438,7 +452,6 @@ class Branch {
   }
 }
 
-// --- REGISTRATION MARKS ---
 function drawRegistrationMarks() {
   push();
   stroke(255, 0, 0); 
